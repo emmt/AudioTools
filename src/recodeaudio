@@ -192,7 +192,7 @@ for src in "$@"; do
 		test -r "$cover" || cover=""
 	    fi
 	    rm -f "$meta"
-	    metaflac --no-filename --export-tags-to="$meta" "$src"
+	    metaflac --no-filename --no-utf8-convert --export-tags-to="$meta" "$src"
 	    test -e "$meta" || touch "$meta"
 	    if test $title_set = "no"; then
 		title=$(FetchFlacMeta "TITLE" "$meta")
