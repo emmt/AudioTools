@@ -25,9 +25,43 @@ quality=4
 destdir=./$format
 subdir="auto"
 
+# Utilities.
+case "$TERM" in
+    xterm*) ansicolors="yes";;
+    *)      ansicolors="no";;
+esac
+if test "$ansicolors" = "yes"; then
+    ANSIBLUEBOLD="\e[1;34m"
+    ANSIRED="\e[1;31m"
+    ANSIGREEN="\e[1;32m"
+    ANSIBROWN="\e[0;33m"
+    ANSIRESET="\e[0;39;49m"
+else
+    ANSIBLUEBOLD=""
+    ANSIRED=""
+    ANSIGREEN=""
+    ANSIBROWN=""
+    ANSIRESET=""
+fi
+Echo() { /bin/echo -e "$*"; }
+EchoBlueBold() { Echo "${ANSIBLUEBOLD}$*${ANSIRESET}"; }
+EchoGreen() { Echo "${ANSIGREEN}$*${ANSIRESET}"; }
+EchoBrown() { Echo "${ANSIBROWN}$*${ANSIRESET}"; }
+EchoRed() { Echo "${ANSIRED}$*${ANSIRESET}"; }
+
 Die() {
-    echo >&2 "$progname: $*"
+    Echo >&2 "${ANSIRED}$progname: $*${ANSIRESET}"
     exit 1
+}
+
+Warn() {
+    Echo >&2 "${ANSIBROWN}(WARNING) $*${ANSIRESET}"
+}
+
+Info() {
+    if test "$verbose" = "yes"; then
+	Echo "${ANSIBLUEBOLD}(INFO) $*${ANSIRESET}"
+    fi
 }
 
 Usage() {
@@ -105,6 +139,12 @@ FetchId3Meta() {
     sed -re "/^=== $1 /!d;s/^[^:]*://;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
 }
 
+TrackNumber() {
+    local str
+    str=$(printf "%02d" "$1" 2>/dev/null) || str="$1"
+    echo "$str"
+}
+
 while test $# -gt 0; do
     case "$1" in
 	--format | --quality | --destdir | --subdir | --album | --title \
@@ -147,11 +187,9 @@ done
 # Compute quality/bitrate for the various encoder.
 bitrate=$(AverageBitrate $quality)
 lamequality=$(LameQuality $quality)
-if test "$verbose" = "yes"; then
-    echo "Ogg quality: $quality"
-    echo "Lame quality: $lamequality"
-    echo "Average bitrate: $bitrate kbit/s"
-fi
+Info "Ogg quality: $quality"
+Info "Lame quality: $lamequality"
+Info "Average bitrate: $bitrate kbit/s"
 
 if test "$cover_set" = "yes" -a ! -r "$cover"; then
     Die "cover image \"$cover\" unreadable"
@@ -160,7 +198,7 @@ fi
 tempdir=/tmp/$progname-$$
 meta="$tempdir/meta.txt"
 if test "$debug" = "yes"; then
-    echo "Temporary directory: $tempdir"
+    Info "Temporary directory: $tempdir"
 else
     trap "rm -rf $tempdir" 0
 fi
@@ -357,7 +395,7 @@ for src in "$@"; do
 	    ;;
 
 	*)
-	    echo >&2 "WARNING: skipping \"$src\" (bad extension)"
+	    Warn >&2 "Skipping \"$src\" (bad extension)"
 	    continue
 	    ;;
     esac
@@ -393,6 +431,9 @@ for src in "$@"; do
 
 	# Initial encoding command.
 	encode="lame --noreplaygain -q 2 -V $lamequality"
+	if test "$verbose" = "no"; then
+	    encode="$encode --silent"
+	fi
 
 	# Add tags.
 	encode="$encode --add-id3v2 --id3v2-only"
@@ -497,10 +538,8 @@ for src in "$@"; do
     fi
 
     # Evaluate commands.
-    if test "$verbose" = "yes"; then
-	echo "Output directory: $dir"
-	echo "Cover image: $cover"
-    fi
+    Info "Output directory: $dir"
+    Info "Cover image: $cover"
     mkdir -p "$dir"
     rm -f "$temp"
     eval $decode
