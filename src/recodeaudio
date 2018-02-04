@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # recodeaudio -
 #
@@ -122,22 +122,148 @@ AverageBitrate() {
     Round $(echo "128*e(($1 - 4)/5)" | bc -l)
 }
 
-# Usage: Fetch TAG FILE
-Fetch() {
-    sed -re "/^[ 	]$1=/I!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+# `FetchTag $tag $meta` retrieves value of tag `$tag` in file `$meta`.
+FetchTag() {
+    sed -r -e "/^$1 *:/I!d;s/^[^:]*://;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
 }
-FetchFlacMeta() {
-    sed -re "/^$1=/!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+
+# Extract meta data using `exiftool` in a unified form.
+ExtractTags() {
+    local pattern
+    case "$1" in
+	exiftool)
+	    exiftool -s "$2" 2>"/dev/null"
+	    ;;
+
+	metaflac)
+	    metaflac --no-filename --no-utf8-convert --export-tags-to="-" \
+		     -- "$2" 2>"/dev/null" \
+		| sed -r \
+		      -e "s/[ 	]+/ /g;s/ $//" \
+		      -e "s/^TITLE= */Title : /" \
+		      -e "s/^ARTIST= */Artist : /" \
+		      -e "s/^ALBUMARTIST= */AlbumArtist : /" \
+		      -e "s/^ALBUM= */Album : /" \
+		      -e "s/^DATE= *[12][0-9][0-9][0-9]$/Year : /" \
+		      -e "s/^DATE= */Date : /" \
+		      -e "s/^TRACKNUMBER= */Track : /" \
+		      -e "s/^GENRE= */Genre : /" \
+		      -e "s/^DESCRIPTION= */Comment : /" \
+		      -e "/^[A-Z][A-Za-z]* : /!d"
+	    ;;
+
+	ogginfo)
+	    ogginfo -- "$2" 2>"/dev/null" \
+		| sed -r \
+		      -e "/^	[A-Z]+=/I!d;s/[ 	]+/ /g;s/ $//" \
+		      -e "s/^ TITLE= */Title : /I" \
+		      -e "s/^ ARTIST= */Artist : /I" \
+		      -e "s/^ ALBUMARTIST= */AlbumArtist : /I" \
+		      -e "s/^ ALBUM= */Album : /I" \
+		      -e "s/^ DATE= *[12][0-9][0-9][0-9]$/Year : /I" \
+		      -e "s/^ DATE= */Date : /I" \
+		      -e "s/^ TRACKNUMBER= */Track : /I" \
+		      -e "s/^ GENRE= */Genre : /I" \
+		      -e "s/^ DESCRIPTION= */Comment : /I" \
+		      -e "/^ /d"
+	    ;;
+
+	opusinfo)
+	    opusinfo -- "$2" 2>"/dev/null" \
+		| sed -r \
+		      -e "/^	[A-Za-z]*=/!d;s/[ 	]+/ /g;s/ $//" \
+		      -e "s/^ title= */Title : /" \
+		      -e "s/^ artist= */Artist : /" \
+		      -e "s/^ ALBUMARTIST= */AlbumArtist : /" \
+		      -e "s/^ album= */Album : /" \
+		      -e "s/^ date= *[12][0-9][0-9][0-9]$/Year : /I" \
+		      -e "s/^ date= */Date : /" \
+		      -e "s/^ TRACKNUMBER= */Track : /" \
+		      -e "s/^ (genre|GENRE)= */Genre : /" \
+		      -e "s/^ DESCRIPTION= */Comment : /" \
+		      -e "/^ /d"
+	    ;;
+
+	mp3info)
+	    pattern="Artist : %a\nAlbum : %l\nTrack : %n\nTitle : %t\n"
+	    pattern="${pattern}Year : %y\nGenre : %g\nComment : %c\nBitrate : %r\n"
+	    mp3info -p "$pattern" "$2" 2>"/dev/null"
+	    ;;
+
+	id3info)
+	    id3info "$2" 2>"/dev/null" \
+		| sed -r \
+		      -e "/^=== [A-Z][A-Z][A-Z]/!d;s/[	 ]+/ /g;s/ $//" \
+		      -e "s/^=== TIT2[^:]*: */Title : /" \
+		      -e "s/^=== TPE1[^:]*: */Artist : /" \
+		      -e "s/^=== TALB[^:]*: */Album : /" \
+		      -e "s/^=== TYER[^:]*: *[12][0-9][0-9][0-9]$/Year : /I" \
+		      -e "s/^=== TYER[^:]*: */Date : /" \
+		      -e "s/^=== TRCK[^:]*: */Track : /" \
+		      -e "s/^=== TCON[^:]*: */Genre : /" \
+		      -e "s/^=== COMM[^:]*: */Comment : /" \
+		      -e "/^=== /d"
+	    ;;
+	*)
+	    Die "Unknown tool \"$1\""
+	    ;;
+    esac
 }
-FetchOpusMeta() {
-    sed -re "/^	$1=/I!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
-}
-FetchMP3Meta() {
-    sed -re "/^$1=/!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
-}
-FetchId3Meta() {
-    sed -re "/^=== $1 /!d;s/^[^:]*://;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
-}
+
+#------------------------------------------------------------------------------
+
+GENRE[0]="Blues";              GENRE[50]="Darkwave";	      GENRE[100]="Humour"
+GENRE[1]="Classic Rock";       GENRE[51]="Techno-Industrial"; GENRE[101]="Speech"
+GENRE[2]="Country";	       GENRE[52]="Electronic";	      GENRE[102]="Chanson"
+GENRE[3]="Dance";	       GENRE[53]="Pop-Folk";	      GENRE[103]="Opera"
+GENRE[4]="Disco";	       GENRE[54]="Eurodance";	      GENRE[104]="Chamber Music"
+GENRE[5]="Funk";	       GENRE[55]="Dream";	      GENRE[105]="Sonata"
+GENRE[6]="Grunge";	       GENRE[56]="Southern Rock";     GENRE[106]="Symphony"
+GENRE[7]="Hip-Hop";	       GENRE[57]="Comedy";	      GENRE[107]="Booty Bass"
+GENRE[8]="Jazz";	       GENRE[58]="Cult";	      GENRE[108]="Primus"
+GENRE[9]="Metal";	       GENRE[59]="Gangsta Rap";	      GENRE[109]="Porn Groove"
+GENRE[10]="New Age";	       GENRE[60]="Top 40";	      GENRE[110]="Satire"
+GENRE[11]="Oldies";	       GENRE[61]="Christian Rap";     GENRE[111]="Slow Jam"
+GENRE[12]="Other";	       GENRE[62]="Pop/Funk";	      GENRE[112]="Club"
+GENRE[13]="Pop";	       GENRE[63]="Jungle";	      GENRE[113]="Tango"
+GENRE[14]="R&B";	       GENRE[64]="Native American";   GENRE[114]="Samba"
+GENRE[15]="Rap";	       GENRE[65]="Cabaret";	      GENRE[115]="Folklore"
+GENRE[16]="Reggae";	       GENRE[66]="New Wave";	      GENRE[116]="Ballad"
+GENRE[17]="Rock";	       GENRE[67]="Psychedelic";	      GENRE[117]="Power Ballad"
+GENRE[18]="Techno";	       GENRE[68]="Rave";	      GENRE[118]="Rhythmic Soul"
+GENRE[19]="Industrial";	       GENRE[69]="Showtunes";	      GENRE[119]="Freestyle"
+GENRE[20]="Alternative";       GENRE[70]="Trailer";	      GENRE[120]="Duet"
+GENRE[21]="Ska";	       GENRE[71]="Lo-Fi";	      GENRE[121]="Punk Rock"
+GENRE[22]="Death Metal";       GENRE[72]="Tribal";	      GENRE[122]="Drum Solo"
+GENRE[23]="Pranks";	       GENRE[73]="Acid Punk";	      GENRE[123]="A Cappella"
+GENRE[24]="Soundtrack";	       GENRE[74]="Acid Jazz";	      GENRE[124]="Euro-House"
+GENRE[25]="Euro-Techno";       GENRE[75]="Polka";	      GENRE[125]="Dance Hall"
+GENRE[26]="Ambient";	       GENRE[76]="Retro";	      GENRE[126]="Goa"
+GENRE[27]="Trip-Hop";	       GENRE[77]="Musical";	      GENRE[127]="Drum & Bass"
+GENRE[28]="Vocal";	       GENRE[78]="Rock & Roll";	      GENRE[128]="Club-House"
+GENRE[29]="Jazz+Funk";	       GENRE[79]="Hard Rock";	      GENRE[129]="Hardcore"
+GENRE[30]="Fusion";	       GENRE[80]="Folk";	      GENRE[130]="Terror"
+GENRE[31]="Trance";	       GENRE[81]="Folk/Rock";	      GENRE[131]="Indie"
+GENRE[32]="Classical";	       GENRE[82]="National Folk";     GENRE[132]="BritPop"
+GENRE[33]="Instrumental";      GENRE[83]="Swing";	      GENRE[133]="Negerpunk"
+GENRE[34]="Acid";	       GENRE[84]="Fast-Fusion";	      GENRE[134]="Polsk Punk"
+GENRE[35]="House";	       GENRE[85]="Bebob";	      GENRE[135]="Beat"
+GENRE[36]="Game";	       GENRE[86]="Latin";	      GENRE[136]="Christian Gangsta Rap"
+GENRE[37]="Sound Clip";	       GENRE[87]="Revival";	      GENRE[137]="Heavy Metal"
+GENRE[38]="Gospel";	       GENRE[88]="Celtic";	      GENRE[138]="Black Metal"
+GENRE[39]="Noise";	       GENRE[89]="Bluegrass";	      GENRE[139]="Crossover"
+GENRE[40]="Alt. Rock";	       GENRE[90]="Avantgarde";	      GENRE[140]="Contemporary Christian"
+GENRE[41]="Bass";	       GENRE[91]="Gothic Rock";	      GENRE[141]="Christian Rock"
+GENRE[42]="Soul";	       GENRE[92]="Progressive Rock";  GENRE[142]="Merengue"
+GENRE[43]="Punk";	       GENRE[93]="Psychedelic Rock";  GENRE[143]="Salsa"
+GENRE[44]="Space";	       GENRE[94]="Symphonic Rock";    GENRE[144]="Thrash Metal"
+GENRE[45]="Meditative";	       GENRE[95]="Slow Rock";	      GENRE[145]="Anime"
+GENRE[46]="Instrumental Pop";  GENRE[96]="Big Band";	      GENRE[146]="JPop"
+GENRE[47]="Instrumental Rock"; GENRE[97]="Chorus";	      GENRE[147]="Synthpop"
+GENRE[48]="Ethnic";	       GENRE[98]="Easy Listening";
+GENRE[49]="Gothic";	       GENRE[99]="Acoustic";
+
+#------------------------------------------------------------------------------
 
 TrackNumber() {
     local str
@@ -215,6 +341,7 @@ for src in "$@"; do
     fi
 
     # Prepare command to decode file and read tags.
+    rm -f "$meta"
     case "$src" in
 	*.flac)
 	    # Input is FLAC audio file.
@@ -223,38 +350,11 @@ for src in "$@"; do
 	    decode="flac -d -o \"\$temp\" \"\$src\""
 
 	    # Parse meta data.
+	    ExtractTags metaflac "$src" >"$meta"
 	    if test "$cover_set" = "no"; then
 		cover="$tempdir/cover.jpg"
-		rm -f "$cover"
 		metaflac --export-picture-to="$cover" "$src"
 		test -r "$cover" || cover=""
-	    fi
-	    rm -f "$meta"
-	    metaflac --no-filename --no-utf8-convert --export-tags-to="$meta" "$src"
-	    test -e "$meta" || touch "$meta"
-	    if test $title_set = "no"; then
-		title=$(FetchFlacMeta "TITLE" "$meta")
-	    fi
-	    if test $artist_set = "no"; then
-		artist=$(FetchFlacMeta "ARTIST" "$meta")
-		if test -z "$artist"; then
-		    artist=$(FetchFlacMeta "ALBUMARTIST" "$meta")
-		fi
-	    fi
-	    if test $album_set = "no"; then
-		album=$(FetchFlacMeta "ALBUM" "$meta")
-	    fi
-	    if test $year_set = "no"; then
-		year=$(FetchFlacMeta "DATE" "$meta")
-	    fi
-	    if test $comment_set = "no"; then
-		comment=$(FetchFlacMeta "DESCRIPTION" "$meta")
-	    fi
-	    if test $track_set = "no"; then
-		track=$(FetchFlacMeta "TRACKNUMBER" "$meta")
-	    fi
-	    if test $genre_set = "no"; then
-		genre=$(FetchFlacMeta "GENRE" "$meta")
 	    fi
 	    ;;
 
@@ -263,35 +363,7 @@ for src in "$@"; do
 	    base=$(basename "$src" .opus)
 	    temp="$tempdir/$base.wav"
 	    decode="opusdec --force-wav --quiet \"\$src\" \"\$temp\""
-
-	    # Parse meta data.
-	    rm -f "$meta"
-	    opusinfo "$src" 2>"/dev/null" 1>"$meta"
-	    test -e "$meta" || touch "$meta"
-	    if test $title_set = "no"; then
-		title=$(FetchOpusMeta "TITLE" "$meta")
-	    fi
-	    if test $artist_set = "no"; then
-		artist=$(FetchOpusMeta "ARTIST" "$meta")
-		if test -z "$artist"; then
-		    artist=$(FetchOpusMeta "ALBUMARTIST" "$meta")
-		fi
-	    fi
-	    if test $album_set = "no"; then
-		album=$(FetchOpusMeta "ALBUM" "$meta")
-	    fi
-	    if test $year_set = "no"; then
-		year=$(FetchOpusMeta "DATE" "$meta")
-	    fi
-	    if test $comment_set = "no"; then
-		comment=$(FetchOpusMeta "DESCRIPTION" "$meta")
-	    fi
-	    if test $track_set = "no"; then
-		track=$(FetchOpusMeta "TRACKNUMBER" "$meta")
-	    fi
-	    if test $genre_set = "no"; then
-		genre=$(FetchOpusMeta "GENRE" "$meta")
-	    fi
+	    ExtractTags opusinfo "$src" >"$meta"
 	    ;;
 
 	*.ogg)
@@ -299,35 +371,7 @@ for src in "$@"; do
 	    base=$(basename "$src" .ogg)
 	    temp="$tempdir/$base.wav"
 	    decode="oggdec --quiet -o \"\$temp\" \"\$src\""
-
-	    # Parse meta data.
-	    rm -f "$meta"
-	    ogginfo "$src" 2>"/dev/null" 1>"$meta"
-	    test -e "$meta" || touch "$meta"
-	    if test $title_set = "no"; then
-		title=$(FetchOpusMeta "TITLE" "$meta")
-	    fi
-	    if test $artist_set = "no"; then
-		artist=$(FetchOpusMeta "ARTIST" "$meta")
-		if test -z "$artist"; then
-		    artist=$(FetchOpusMeta "ALBUMARTIST" "$meta")
-		fi
-	    fi
-	    if test $album_set = "no"; then
-		album=$(FetchOpusMeta "ALBUM" "$meta")
-	    fi
-	    if test $year_set = "no"; then
-		year=$(FetchOpusMeta "DATE" "$meta")
-	    fi
-	    if test $comment_set = "no"; then
-		comment=$(FetchOpusMeta "DESCRIPTION" "$meta")
-	    fi
-	    if test $track_set = "no"; then
-		track=$(FetchOpusMeta "TRACKNUMBER" "$meta")
-	    fi
-	    if test $genre_set = "no"; then
-		genre=$(FetchOpusMeta "GENRE" "$meta")
-	    fi
+	    ExtractTags ogginfo "$src" >"$meta"
 	    ;;
 
 	*.mp3)
@@ -339,58 +383,10 @@ for src in "$@"; do
 	    #decode="$decode --type mp3 \"\$src\" --type wav \"\$temp\""
 
 	    # Parse meta data.
-	    if false; then
-		pattern="artist=%a\nalbum=%l\ntracknum=%n\ntitle=%t\n"
-		pattern="${pattern}date=%y\ngenre=%g\ncomment=%c\nbitrate=%r\n"
-		rm -f "$meta"
-		mp3info -p "$pattern" "$src" 2>"/dev/null" >"$meta"
-		test -e "$meta" || touch "$meta"
-		if test $title_set = "no"; then
-		    title=$(FetchFlacMeta "title" "$meta")
-		fi
-		if test $artist_set = "no"; then
-		    artist=$(FetchFlacMeta "artist" "$meta")
-		fi
-		if test $album_set = "no"; then
-		    album=$(FetchFlacMeta "album" "$meta")
-		fi
-		if test $year_set = "no"; then
-		    year=$(FetchFlacMeta "date" "$meta")
-		fi
-		if test $comment_set = "no"; then
-		    comment=$(FetchFlacMeta "comment" "$meta")
-		fi
-		if test $track_set = "no"; then
-		    track=$(FetchFlacMeta "tracknum" "$meta")
-		fi
-		if test $genre_set = "no"; then
-		    genre=$(FetchFlacMeta "genre" "$meta")
-		fi
+	    if true; then
+		ExtractTags mp3info "$src" >"$meta"
 	    else
-		rm -f "$meta"
-		id3info "$src" 2>"/dev/null" >"$meta"
-		test -e "$meta" || touch "$meta"
-		if test $title_set = "no"; then
-		    title=$(FetchId3Meta "TIT2" "$meta")
-		fi
-		if test $artist_set = "no"; then
-		    artist=$(FetchId3Meta "TPE1" "$meta")
-		fi
-		if test $album_set = "no"; then
-		    album=$(FetchId3Meta "TALB" "$meta")
-		fi
-		if test $year_set = "no"; then
-		    year=$(FetchId3Meta "TYER" "$meta")
-		fi
-		#if test $comment_set = "no"; then
-		#    comment=$(FetchId3Meta "comment" "$meta")
-		#fi
-		if test $track_set = "no"; then
-		    track=$(FetchId3Meta "TRCK" "$meta")
-		fi
-		if test $genre_set = "no"; then
-		    genre=$(FetchId3Meta "TCON" "$meta")
-		fi
+		ExtractTags id3info "$src" >"$meta"
 	    fi
 	    ;;
 
@@ -399,6 +395,51 @@ for src in "$@"; do
 	    continue
 	    ;;
     esac
+
+    # Fetch/guess tags.
+    test -e "$meta" || touch "$meta"
+    canonname=$(readlink --canonicalize "$src")
+    canondir=$(basename $(dirname "$canonname"))
+    canonbase=$(basename "$canonname" | sed -e 's/\.[^.]*$//')
+    if test $title_set = "no"; then
+	title=$(FetchTag "Title" "$meta")
+    fi
+    if test $artist_set = "no"; then
+	artist=$(FetchTag "Artist" "$meta")
+	if test -z "$artist"; then
+	    artist=$(FetchTag "AlbumArtist" "$meta")
+	fi
+    fi
+    if test $album_set = "no"; then
+	album=$(FetchTag "Album" "$meta")
+    fi
+    if test $year_set = "no"; then
+	year=$(FetchTag "Year" "$meta")
+	if test -z "$year"; then
+	    year=$(FetchTag "Date" "$meta")
+	fi
+	if test -z "$year"; then
+	    year=$(FetchTag "RecordingTime" "$meta")
+	fi
+    fi
+    if test $comment_set = "no"; then
+	comment=$(FetchTag "Description" "$meta")
+    fi
+    if test $track_set = "no"; then
+	track=$(FetchTag "Track" "$meta")
+	if test -z "$track"; then
+	    track=$(FetchTag "TrackNumber" "$meta")
+	fi
+    fi
+    if test $genre_set = "no"; then
+	genre=$(FetchTag "Genre" "$meta")
+	if tg=$(printf "%d" "$genre" 2>/dev/null); then
+	    tg=${GENRE[$tg]}
+	    if ! test -z "$tg"; then
+		genre=$tg
+	    fi
+	fi
+    fi
 
     # Default cover image.
     if test "$cover_set" = "no" -a -z "$cover"; then
