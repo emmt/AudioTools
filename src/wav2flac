@@ -1,0 +1,56 @@
+#!/bin/bash
+
+temp=/tmp/tmp-$$
+trap "rm -f $temp" 0
+
+die() {
+  echo >&2 "$*"
+  exit 1
+}
+
+if test $# -lt 1; then
+    die "usage: $0 FILE1.wav [FILE2.wav ...]"
+fi
+
+n=0
+while test $# -gt 0; do
+    src=$(readlink -f "$1")
+    shift
+    let n=n+1
+    case "$src" in
+	*.wav)
+	    base=$(basename "$src" .wav)
+	    dir=$(dirname "$src")
+	    dst=$dir/$base.flac
+	    album=$(basename "$dir")
+	    dir=$(dirname "$dir")
+	    track=$(echo "$base" | sed -e 's/^ *\([0-9][0-9]*\) *[-.] *..*$/\1/')
+	    if test -z "$track"; then
+		track=$(printf "%02d" $n)
+		title=$base
+	    else
+		title=$(echo "$base" | sed -e 's/^ *[0-9][0-9]* *[-.] *\(.*[^ ]\) *$/\1/')
+	    fi
+	    artist=$(basename "$dir")
+	    year=$(echo "$album" | sed -e 's/.*(\([12][0-9][0-9][0-9]\)) *$/\1/')
+	    if test -z "$year"; then
+		echo >&2 "unknown year for file \"$src\""
+		flac -8 -o "$dst" \
+		    -T "ARTIST=$artist" -T "ALBUMARTIST=$artist" \
+		    -T "ALBUM=$album" \
+		    -T "TRACKNUMBER=$track" \
+		    -T "TITLE=$title" "$src"
+	    else
+		album=$(echo "$album" | sed -e 's/^\(.*[^ ]\) *([12][0-9][0-9][0-9]) *$/\1/')
+		flac -8 -o "$dst" \
+		    -T "ARTIST=$artist" -T "ALBUMARTIST=$artist" \
+		    -T "ALBUM=$album" \
+		    -T "DATE=$year" \
+		    -T "TRACKNUMBER=$track" \
+		    -T "TITLE=$title" "$src"
+	    fi
+	    ;;
+	*)
+	    echo >&2 "unexpected extension of file \"$src\""
+    esac
+done

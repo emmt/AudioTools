@@ -1,0 +1,130 @@
+#!/bin/bash
+#
+# splitaudio -
+#
+# Convert FLAC audio files (with tags) into MP3 audio files (preserving tags).
+#
+# Copyright (c) 2015, Éric Thiébaut.
+#
+
+progname=$(basename "$0" .sh | sed -r 's/[^a-zA-Z0-9]+/_/g')
+
+options="level above below verb"
+for name in $options; do
+    eval ${name}=\"\"
+    eval ${name}_set=\"no\"
+done
+
+# Default options.
+level=-60d
+above=3.0
+below=2.0
+verb=2
+
+Die() {
+    echo >&2 "$*"
+    exit 1
+}
+
+Usage() {
+  cat >&2 <<EOF
+Usage: $progname [OPTIONS] INPUT [...] OUTPUT
+
+Split audio file(s) in multiple output files using silences to cut the
+audio stream.  INPUT [...] is any number of input files.  OUTPUT is the
+name of the output files (extension is used to guess the output format, a
+%n or a %#n may be present to indicate where to insert the output file
+number, # is the minimum number of digits, 3 by default).
+
+The options are:
+  --level VALUE      Threshold level for silence [$level].
+  --above DURATION   Minimum duration of non-silence [$above].
+  --below DURATION   Minimum duration of silence between files [$below].
+  --verb LEVEL	     Level of verbosity [$verb].
+  -h, --help	     Display this help and exit.
+  --		     End of options.
+EOF
+  exit 1
+}
+
+while test $# -gt 0; do
+    case "$1" in
+	--help|-h)
+	    Usage
+	    ;;
+	--level | --above | --below | --verb )
+	    test $# -ge 2 || Die "missing argument for option $1"
+	    name=$(echo "$1" | sed 's/^--//')
+	    eval value=\$${name}_set
+	    test "$value" = "no" || Die "option $1 already set"
+	    value=$2
+	    eval ${name}=\$value
+	    eval ${name}_set=yes
+	    shift
+	    ;;
+	--)
+	    shift
+	    break
+	    ;;
+	--* | -* )
+	    Die "Unknown option \"$1\" (try --help)"
+	    ;;
+	*)
+	    break
+	    ;;
+    esac
+    shift
+done
+
+#for name in $options; do
+#    eval value=\$${name}_set
+#    if test "$value" = "yes"; then
+# 	eval value=\$${name}
+#    else
+# 	value="(auto)"
+#    fi
+#    echo "$name: $value"
+#done
+#echo "args: $*"
+
+n=0
+while test $# -gt 0; do
+    let n=n+1
+    arg[$n]=$1
+    shift
+done
+
+test $n -ge 2 || Die "Bad number of files (try --help)"
+
+# Subsitute name of output file(s) to use a temporary directory.
+tempdir=/tmp/$progname-$USER-$$
+output=${arg[-1]}
+case "$output" in
+    */* )
+	destdir=$(dirname "$output")
+	arg[-1]=$tempdir/$(basename "$output")
+	;;
+    * )
+	destdir="."
+	;;
+esac
+test -e "$tempdir" && Die "Temporary directory \"$tempdir\" already exists"
+on_exit() {
+  rm -rf "$tempdir"
+}
+trap on_exit 0
+mkdir -p "$tempdir"
+
+sox -V$verb "${arg[@]}" silence \
+    1 "$above" "$level" \
+    1 "$below" "$level" : newfile : restart
+
+mkdir -p "$destdir" || Die "Cannot make output directory \"$destdir\""
+for src in "$tempdir"/*; do
+    dst=$destdir/$(basename "$src")
+    sox -V$verb "$src" "$dst" \
+	silence 1 "$above" "$level" reverse \
+	silence 1 "$above" "$level" reverse
+done
+
+exit 0

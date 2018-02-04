@@ -1,0 +1,116 @@
+#! /bin/sh
+#
+# trimaudio -
+#
+# Remove silences at the beginning and at the end of a sound file.
+#
+# Copyright (C) 2015, Éric Thiébaut.
+#
+#------------------------------------------------------------------------------
+
+progname=$(basename "$0" .sh | sed -r 's/[^a-zA-Z0-9]+/_/g')
+
+options="level above verb"
+for name in $options; do
+    eval ${name}=\"\"
+    eval ${name}_set=\"no\"
+done
+
+# Default options.
+level=-60d
+above=1.0
+verb=2
+
+# defaults:
+level=-60d
+above=0.5
+
+tempbase=/tmp/$progname-$USER-$$
+
+Die() {
+  echo >&2 "$*"
+  exit 1
+}
+
+Usage() {
+  cat >&2 <<EOF
+Usage: $progname [OPTIONS] SND1 [SND2 ...]
+
+Remove silence at the beginning and at the end of sound files SND1, SND2, ...
+
+The options are:
+  --level VALUE      Threshold level for silence [$level].
+  --above DURATION   Minimum duration of non-silence [$above].
+  --verb LEVEL	     Level of verbosity [$verb].
+  -h, --help	     Display this help and exit.
+  --		     End of options.
+EOF
+  exit 1
+}
+
+while test $# -gt 0; do
+    case "$1" in
+	--help|-h)
+	    Usage
+	    ;;
+	--level | --above | --verb )
+	    test $# -ge 2 || Die "missing argument for option $1"
+	    name=$(echo "$1" | sed 's/^--//')
+	    eval value=\$${name}_set
+	    test "$value" = "no" || Die "option $1 already set"
+	    value=$2
+	    eval ${name}=\$value
+	    eval ${name}_set=yes
+	    shift
+	    ;;
+	--)
+	    shift
+	    break
+	    ;;
+	--* | -* )
+	    Die "Unknown option \"$1\" (try --help)"
+	    ;;
+	*)
+	    break
+	    ;;
+    esac
+    shift
+done
+
+tmp=""
+oext=""
+while test $# -gt 0; do
+  src="$1"
+  shift
+  case "$src" in
+    *.flac)
+      ext=flac
+      ;;
+    *.ogg)
+      ext=ogg
+      ;;
+    *.mp3)
+      ext=mp3
+      ;;
+    *.wav)
+      ext=wav
+      ;;
+    *)
+      Die "unknown file type for: \"$src\""
+      ;;
+  esac
+  #if test "ext" != "oext"; then
+  #  if test "$tmp" != ""; then
+  #    rm -f "$tmp"
+  #  fi
+  #  tmp=$(mktemp --suffix ".$ext" "$USER-XXXXXX")
+  #fi
+  tmp="$tempbase.$ext"
+  mv -f "$src" "$tmp"
+  sox -V"$verb" "$tmp" "$src" \
+      silence 1 "$above" "$level" reverse \
+      silence 1 "$above" "$level" reverse
+  touch -r "$tmp" "$src"
+  rm -f "$tmp"
+  echo "$src (done)"
+done

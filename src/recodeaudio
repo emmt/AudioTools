@@ -1,0 +1,509 @@
+#!/bin/sh
+#
+# recodeaudio -
+#
+# Convert audio files into high quality MP3, OGG Vorbis or Opus audio files
+# (preserving tags).
+#
+# Copyright (c) 2018, Éric Thiébaut.
+#
+
+progname=$(basename "$0" .sh | sed -r 's/[^a-zA-Z0-9]+/_/g')
+
+fields="format quality destdir subdir cover album title genre comment artist track year"
+for name in $fields; do
+    eval ${name}=\"\"
+    eval ${name}_set=\"no\"
+done
+
+# Defaults.
+verbose="no"
+debug="no"
+format="opus"
+bitrate=128
+quality=4
+destdir=./$format
+subdir="auto"
+
+Die() {
+    echo >&2 "$*"
+    exit 1
+}
+
+Usage() {
+    cat >&2 <<EOF
+Usage: recodeaudio [OPTIONS] [INPUT]...
+
+Convert audio sound file(s) into high quality MP3, OGG Vorbis or Opus audio
+file(s) preserving tags.  The options are:
+  --format opus|ogg|mp3    output type [$format]
+  --quality QUALITY        qualitoutput bitrate in kbit/s [$bitrate]
+  --destdir DESTDIR        top destination directory [$destdir]
+  --subdir auto|none       create subdirectory based on tags [$subdir]
+  --album ALBUM            album title
+  --title TITLE            title
+  --genre GENRE            genre of music
+  --comment COMMENT        some comments
+  --artist ARTIST          title artist
+  --year YEAR              title year
+  --track TRACK            track number
+  --cover IMAGE            cover image
+  --verbose                verbose mode
+  -h, --help               display this help and exit
+  --                       end of options
+
+Quality setting roughly corresponds to that of the Vorbis Ogg encoder.  The
+best quality is 10, the worse quality is -2.  Choosing QUALITY=4 (the
+default) corresponds to requiring an average bitrate of 128 kbit/s for the
+Opus encoder or to a quality level of 5.6 for the Lame encoder.
+
+EOF
+    exit 1
+}
+
+# Approximate formulae based on tables in http://wiki.hydrogenaud.io:
+#
+#     average_bitrate = 240 - 20*lame_quality
+#     lame_quality = (240 - average_bitrate)/20
+#     average_bitrate = 128*exp(0.2*(ogg_quality - 4))
+#     ogg_quality = 4 + 5*log(average_bitrate/128)
+#
+
+# Round to nearest integer.  Set environment variable to make sure
+# fractional number are correctly interpreted.
+export LC_NUMERIC=C
+Round() {
+    printf "%.0f" "$1"
+}
+
+# `LameQuality $quality` yields quality level for the Lame encoder given
+# the quality level of the OGG encoder.
+LameQuality() {
+    printf "%.3f" $(echo "quality = (240 - 128*e(($1 - 4)/5))/20; if (quality < 0) quality = 0; if (quality > 9.999) quality = 9.999; print quality"  | bc -l)
+}
+
+# `AverageBitrate $quality` yields bitrate (in kbit/s) for the Opus encoder
+# given the quality level of the OGG encoder.
+AverageBitrate() {
+    Round $(echo "128*e(($1 - 4)/5)" | bc -l)
+}
+
+# Usage: Fetch TAG FILE
+Fetch() {
+    sed -re "/^[ 	]$1=/I!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+}
+FetchFlacMeta() {
+    sed -re "/^$1=/!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+}
+FetchOpusMeta() {
+    sed -re "/^	$1=/I!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+}
+FetchMP3Meta() {
+    sed -re "/^$1=/!d;s/^[^=]*=//;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+}
+FetchId3Meta() {
+    sed -re "/^=== $1 /!d;s/^[^:]*://;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
+}
+
+while test $# -gt 0; do
+    case "$1" in
+	--format | --quality | --destdir | --subdir | --album | --title \
+	    | --artist | --genre | --comment | --cover | --track | --year)
+	    test $# -ge 2 || Die "missing argument for option $1"
+	    name=$(echo "$1" | sed 's/^--//')
+	    eval value=\$${name}_set
+	    test "$value" = "no" || Die "option $1 already set"
+	    value=$2
+	    eval ${name}=\$value
+	    eval ${name}_set=yes
+	    if test "$name" = "format" -a "$destdir_set" = "no"; then
+		destdir=./$format
+	    fi
+	    shift
+	    ;;
+	--verbose)
+	    verbose="yes"
+	    ;;
+	--debug)
+	    debug="yes"
+	    ;;
+	--help|-h)
+	    Usage
+	    ;;
+	--)
+	    shift
+	    break
+	    ;;
+	--* | -* )
+	    Die "unknown option \"$1\" (try --help)"
+	    ;;
+	*)
+	    break
+	    ;;
+    esac
+    shift
+done
+
+# Compute quality/bitrate for the various encoder.
+bitrate=$(AverageBitrate $quality)
+lamequality=$(LameQuality $quality)
+if test "$verbose" = "yes"; then
+    echo "Ogg quality: $quality"
+    echo "Lame quality: $lamequality"
+    echo "Average bitrate: $bitrate kbit/s"
+fi
+
+if test "$cover_set" = "yes" -a ! -r "$cover"; then
+    Die "cover image \"$cover\" unreadable"
+fi
+
+tempdir=/tmp/$progname-$$
+meta="$tempdir/meta.txt"
+if test "$debug" = "yes"; then
+    echo "Temporary directory: $tempdir"
+else
+    trap "rm -rf $tempdir" 0
+fi
+mkdir -p "$tempdir"
+
+for src in "$@"; do
+    # Reset variables.
+    srcdir=$(dirname "$src")
+    base=""
+    temp=""
+    decode=""
+    if test "$cover_set" = "no"; then
+	cover=""
+    fi
+
+    # Prepare command to decode file and read tags.
+    case "$src" in
+	*.flac)
+	    # Input is FLAC audio file.
+	    base=$(basename "$src" .flac)
+	    temp="$tempdir/$base.wav"
+	    decode="flac -d -o \"\$temp\" \"\$src\""
+
+	    # Parse meta data.
+	    if test "$cover_set" = "no"; then
+		cover="$tempdir/cover.jpg"
+		rm -f "$cover"
+		metaflac --export-picture-to="$cover" "$src"
+		test -r "$cover" || cover=""
+	    fi
+	    rm -f "$meta"
+	    metaflac --no-filename --export-tags-to="$meta" "$src"
+	    test -e "$meta" || touch "$meta"
+	    if test $title_set = "no"; then
+		title=$(FetchFlacMeta "TITLE" "$meta")
+	    fi
+	    if test $artist_set = "no"; then
+		artist=$(FetchFlacMeta "ARTIST" "$meta")
+		if test -z "$artist"; then
+		    artist=$(FetchFlacMeta "ALBUMARTIST" "$meta")
+		fi
+	    fi
+	    if test $album_set = "no"; then
+		album=$(FetchFlacMeta "ALBUM" "$meta")
+	    fi
+	    if test $year_set = "no"; then
+		year=$(FetchFlacMeta "DATE" "$meta")
+	    fi
+	    if test $comment_set = "no"; then
+		comment=$(FetchFlacMeta "DESCRIPTION" "$meta")
+	    fi
+	    if test $track_set = "no"; then
+		track=$(FetchFlacMeta "TRACKNUMBER" "$meta")
+	    fi
+	    if test $genre_set = "no"; then
+		genre=$(FetchFlacMeta "GENRE" "$meta")
+	    fi
+	    ;;
+
+	*.opus)
+	    # Input is Opus audio file.
+	    base=$(basename "$src" .opus)
+	    temp="$tempdir/$base.wav"
+	    decode="opusdec --force-wav --quiet \"\$src\" \"\$temp\""
+
+	    # Parse meta data.
+	    rm -f "$meta"
+	    opusinfo "$src" 2>"/dev/null" 1>"$meta"
+	    test -e "$meta" || touch "$meta"
+	    if test $title_set = "no"; then
+		title=$(FetchOpusMeta "TITLE" "$meta")
+	    fi
+	    if test $artist_set = "no"; then
+		artist=$(FetchOpusMeta "ARTIST" "$meta")
+		if test -z "$artist"; then
+		    artist=$(FetchOpusMeta "ALBUMARTIST" "$meta")
+		fi
+	    fi
+	    if test $album_set = "no"; then
+		album=$(FetchOpusMeta "ALBUM" "$meta")
+	    fi
+	    if test $year_set = "no"; then
+		year=$(FetchOpusMeta "DATE" "$meta")
+	    fi
+	    if test $comment_set = "no"; then
+		comment=$(FetchOpusMeta "DESCRIPTION" "$meta")
+	    fi
+	    if test $track_set = "no"; then
+		track=$(FetchOpusMeta "TRACKNUMBER" "$meta")
+	    fi
+	    if test $genre_set = "no"; then
+		genre=$(FetchOpusMeta "GENRE" "$meta")
+	    fi
+	    ;;
+
+	*.ogg)
+	    # Input is OGG Vorbis audio file.
+	    base=$(basename "$src" .ogg)
+	    temp="$tempdir/$base.wav"
+	    decode="oggdec --quiet -o \"\$temp\" \"\$src\""
+
+	    # Parse meta data.
+	    rm -f "$meta"
+	    ogginfo "$src" 2>"/dev/null" 1>"$meta"
+	    test -e "$meta" || touch "$meta"
+	    if test $title_set = "no"; then
+		title=$(FetchOpusMeta "TITLE" "$meta")
+	    fi
+	    if test $artist_set = "no"; then
+		artist=$(FetchOpusMeta "ARTIST" "$meta")
+		if test -z "$artist"; then
+		    artist=$(FetchOpusMeta "ALBUMARTIST" "$meta")
+		fi
+	    fi
+	    if test $album_set = "no"; then
+		album=$(FetchOpusMeta "ALBUM" "$meta")
+	    fi
+	    if test $year_set = "no"; then
+		year=$(FetchOpusMeta "DATE" "$meta")
+	    fi
+	    if test $comment_set = "no"; then
+		comment=$(FetchOpusMeta "DESCRIPTION" "$meta")
+	    fi
+	    if test $track_set = "no"; then
+		track=$(FetchOpusMeta "TRACKNUMBER" "$meta")
+	    fi
+	    if test $genre_set = "no"; then
+		genre=$(FetchOpusMeta "GENRE" "$meta")
+	    fi
+	    ;;
+
+	*.mp3)
+	    # Input is MP3 audio file.
+	    base=$(basename "$src" .mp3)
+	    temp="$tempdir/$base.wav"
+	    decode="lame --decode \"\$src\" \"\$temp\""
+	    #decode="sox -q --multi-threaded --norm"
+	    #decode="$decode --type mp3 \"\$src\" --type wav \"\$temp\""
+
+	    # Parse meta data.
+	    if false; then
+		pattern="artist=%a\nalbum=%l\ntracknum=%n\ntitle=%t\n"
+		pattern="${pattern}date=%y\ngenre=%g\ncomment=%c\nbitrate=%r\n"
+		rm -f "$meta"
+		mp3info -p "$pattern" "$src" 2>"/dev/null" >"$meta"
+		test -e "$meta" || touch "$meta"
+		if test $title_set = "no"; then
+		    title=$(FetchFlacMeta "title" "$meta")
+		fi
+		if test $artist_set = "no"; then
+		    artist=$(FetchFlacMeta "artist" "$meta")
+		fi
+		if test $album_set = "no"; then
+		    album=$(FetchFlacMeta "album" "$meta")
+		fi
+		if test $year_set = "no"; then
+		    year=$(FetchFlacMeta "date" "$meta")
+		fi
+		if test $comment_set = "no"; then
+		    comment=$(FetchFlacMeta "comment" "$meta")
+		fi
+		if test $track_set = "no"; then
+		    track=$(FetchFlacMeta "tracknum" "$meta")
+		fi
+		if test $genre_set = "no"; then
+		    genre=$(FetchFlacMeta "genre" "$meta")
+		fi
+	    else
+		rm -f "$meta"
+		id3info "$src" 2>"/dev/null" >"$meta"
+		test -e "$meta" || touch "$meta"
+		if test $title_set = "no"; then
+		    title=$(FetchId3Meta "TIT2" "$meta")
+		fi
+		if test $artist_set = "no"; then
+		    artist=$(FetchId3Meta "TPE1" "$meta")
+		fi
+		if test $album_set = "no"; then
+		    album=$(FetchId3Meta "TALB" "$meta")
+		fi
+		if test $year_set = "no"; then
+		    year=$(FetchId3Meta "TYER" "$meta")
+		fi
+		#if test $comment_set = "no"; then
+		#    comment=$(FetchId3Meta "comment" "$meta")
+		#fi
+		if test $track_set = "no"; then
+		    track=$(FetchId3Meta "TRCK" "$meta")
+		fi
+		if test $genre_set = "no"; then
+		    genre=$(FetchId3Meta "TCON" "$meta")
+		fi
+	    fi
+	    ;;
+
+	*)
+	    echo >&2 "WARNING: skipping \"$src\" (bad extension)"
+	    continue
+	    ;;
+    esac
+
+    # Default cover image.
+    if test "$cover_set" = "no" -a -z "$cover"; then
+	cover="$srcdir/cover.jpg"
+    fi
+
+    # Setup destination directory and file name.
+    dir=$destdir
+    if test "$subdir" = "auto"; then
+	if test -z "$artist"; then
+	    dir="$dir/ARTIST"
+	else
+	    dir="$dir/$artist"
+	fi
+	if test -z "$year"; then
+	    dir="$dir (YEAR)"
+	else
+	    dir="$dir ($year)"
+	fi
+	if test -z "$album"; then
+	    dir="$dir ALBUM"
+	else
+	    dir="$dir $album"
+	fi
+    fi
+    dest="$dir/$base.$format"
+
+    # Build encoding command.
+    if test "$format" = "mp3"; then
+
+	# Initial encoding command.
+	encode="lame --noreplaygain -q 2 -V $lamequality"
+
+	# Add tags.
+	encode="$encode --add-id3v2 --id3v2-only"
+	if test -r "$cover"; then
+	    encode="$encode --ti \"\$cover\""
+	fi
+	if ! test -z "$title"; then
+	    encode="$encode --tt \"\$title\""
+	fi
+	if ! test -z "$artist"; then
+	    encode="$encode --ta \"\$artist\""
+	fi
+	if ! test -z "$album"; then
+	    encode="$encode --tl \"\$album\""
+	fi
+	if ! test -z "$year"; then
+	    encode="$encode --ty \"\$year\""
+	fi
+	if ! test -z "$comment"; then
+	    encode="$encode --tc \"\$comment\""
+	fi
+	if ! test -z "$track"; then
+	    encode="$encode --tn \"\$track\""
+	fi
+	if ! test -z "$genre"; then
+	    encode="$encode --tg \"\$genre\""
+	fi
+
+	# Add source and destination files.
+	encode="$encode \"\$temp\" \"\$dest\""
+
+    elif test "$format" = "opus"; then
+
+	# Initial encoding command.
+	encode="opusenc --bitrate $bitrate --vbr --comp 10"
+	test "$verbose" = "yes" || encode="$encode --quiet"
+
+	# Add tags (see https://www.xiph.org/vorbis/doc/v-comment.html).
+	if test -r "$cover"; then
+	    encode="$encode --picture \"3||||\$cover\""
+	fi
+	if ! test -z "$title"; then
+	    encode="$encode --title \"\$title\""
+	fi
+	if ! test -z "$artist"; then
+	    encode="$encode --artist \"\$artist\""
+	fi
+	if ! test -z "$album"; then
+	    encode="$encode --album \"\$album\""
+	fi
+	if ! test -z "$year"; then
+	    encode="$encode --date \"\$year\""
+	fi
+	if ! test -z "$track"; then
+	    encode="$encode --comment \"TRACKNUMBER=\$track\""
+	fi
+	if ! test -z "$comment"; then
+	    encode="$encode --comment \"DESCRIPTION=\$comment\""
+	fi
+	if ! test -z "$genre"; then
+	    #encode="$encode --genre \"\$genre\""
+	    encode="$encode --comment \"GENRE=\$genre\""
+	fi
+
+	# Add source and destination files.
+	encode="$encode \"\$temp\" \"\$dest\""
+
+    elif test "$format" = "ogg"; then
+
+	# Initial encoding command.
+	encode="oggenc -q $quality"
+
+	# Add tags (see https://www.xiph.org/vorbis/doc/v-comment.html).
+	if ! test -z "$title"; then
+	    encode="$encode --title \"\$title\""
+	fi
+	if ! test -z "$artist"; then
+	    encode="$encode --artist \"\$artist\""
+	fi
+	if ! test -z "$album"; then
+	    encode="$encode --album \"\$album\""
+	fi
+	if ! test -z "$year"; then
+	    encode="$encode --date \"\$year\""
+	fi
+	if ! test -z "$track"; then
+	    encode="$encode --tracknum \"\$track\""
+	fi
+	if ! test -z "$comment"; then
+	    encode="$encode -c \"DESCRIPTION=\$comment\""
+	fi
+	if ! test -z "$genre"; then
+	    #encode="$encode --genre \"\$genre\""
+	    encode="$encode --genre \"\$genre\""
+	fi
+
+	# Add source and destination files.
+	encode="$encode \"\$temp\" \"\$dest\""
+
+    else
+	Die "Unknown output format \"$format\""
+    fi
+
+    # Evaluate commands.
+    if test "$verbose" = "yes"; then
+	echo "Output directory: $dir"
+	echo "Cover image: $cover"
+    fi
+    mkdir -p "$dir"
+    rm -f "$temp"
+    eval $decode
+    eval $encode
+done
+exit 0
