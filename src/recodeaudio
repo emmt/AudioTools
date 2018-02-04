@@ -26,13 +26,13 @@ destdir=./$format
 subdir="auto"
 
 Die() {
-    echo >&2 "$*"
+    echo >&2 "$progname: $*"
     exit 1
 }
 
 Usage() {
     cat >&2 <<EOF
-Usage: recodeaudio [OPTIONS] [INPUT]...
+Usage: $progname [OPTIONS] [INPUT]...
 
 Convert audio sound file(s) into high quality MP3, OGG Vorbis or Opus audio
 file(s) preserving tags.  The options are:
