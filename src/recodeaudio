@@ -127,6 +127,10 @@ FetchTag() {
     sed -r -e "/^$1 *:/I!d;s/^[^:]*://;s/[ 	]+/ /g;s/^ //;s/ $//" "$2"
 }
 
+StripSpaces() {
+    echo "$*" | sed -e 's/[ 	][ 	]*/ /g;s/^ //;s/ $//'
+}
+
 # Extract meta data using `exiftool` in a unified form.
 ExtractTags() {
     local pattern
@@ -144,7 +148,7 @@ ExtractTags() {
 		      -e "s/^ARTIST= */Artist : /" \
 		      -e "s/^ALBUMARTIST= */AlbumArtist : /" \
 		      -e "s/^ALBUM= */Album : /" \
-		      -e "s/^DATE= *[12][0-9][0-9][0-9]$/Year : /" \
+		      -e "s/^DATE= *([12][0-9][0-9][0-9])$/Year : \1/" \
 		      -e "s/^DATE= */Date : /" \
 		      -e "s/^TRACKNUMBER= */Track : /" \
 		      -e "s/^GENRE= */Genre : /" \
@@ -160,7 +164,7 @@ ExtractTags() {
 		      -e "s/^ ARTIST= */Artist : /I" \
 		      -e "s/^ ALBUMARTIST= */AlbumArtist : /I" \
 		      -e "s/^ ALBUM= */Album : /I" \
-		      -e "s/^ DATE= *[12][0-9][0-9][0-9]$/Year : /I" \
+		      -e "s/^ DATE= *([12][0-9][0-9][0-9])$/Year : \1/I" \
 		      -e "s/^ DATE= */Date : /I" \
 		      -e "s/^ TRACKNUMBER= */Track : /I" \
 		      -e "s/^ GENRE= */Genre : /I" \
@@ -176,7 +180,7 @@ ExtractTags() {
 		      -e "s/^ artist= */Artist : /" \
 		      -e "s/^ ALBUMARTIST= */AlbumArtist : /" \
 		      -e "s/^ album= */Album : /" \
-		      -e "s/^ date= *[12][0-9][0-9][0-9]$/Year : /I" \
+		      -e "s/^ date= *([12][0-9][0-9][0-9])$/Year : \1/I" \
 		      -e "s/^ date= */Date : /" \
 		      -e "s/^ TRACKNUMBER= */Track : /" \
 		      -e "s/^ (genre|GENRE)= */Genre : /" \
@@ -197,7 +201,7 @@ ExtractTags() {
 		      -e "s/^=== TIT2[^:]*: */Title : /" \
 		      -e "s/^=== TPE1[^:]*: */Artist : /" \
 		      -e "s/^=== TALB[^:]*: */Album : /" \
-		      -e "s/^=== TYER[^:]*: *[12][0-9][0-9][0-9]$/Year : /I" \
+		      -e "s/^=== TYER[^:]*: *([12][0-9][0-9][0-9])$/Year : \1/I" \
 		      -e "s/^=== TYER[^:]*: */Date : /" \
 		      -e "s/^=== TRCK[^:]*: */Track : /" \
 		      -e "s/^=== TCON[^:]*: */Genre : /" \
@@ -382,12 +386,8 @@ for src in "$@"; do
 	    #decode="sox -q --multi-threaded --norm"
 	    #decode="$decode --type mp3 \"\$src\" --type wav \"\$temp\""
 
-	    # Parse meta data.
-	    if true; then
-		ExtractTags mp3info "$src" >"$meta"
-	    else
-		ExtractTags id3info "$src" >"$meta"
-	    fi
+	    # Parse meta data (id3info is to be preffered to mp3info).
+	    ExtractTags id3info "$src" >"$meta"
 	    ;;
 
 	*)
@@ -399,7 +399,8 @@ for src in "$@"; do
     # Fetch/guess tags.
     test -e "$meta" || touch "$meta"
     canonname=$(readlink --canonicalize "$src")
-    canondir=$(basename $(dirname "$canonname"))
+    canondir=$(dirname "$canonname")
+    canondir=$(basename "$canondir")
     canonbase=$(basename "$canonname" | sed -e 's/\.[^.]*$//')
     if test $title_set = "no"; then
 	title=$(FetchTag "Title" "$meta")
@@ -433,7 +434,12 @@ for src in "$@"; do
     fi
     if test $genre_set = "no"; then
 	genre=$(FetchTag "Genre" "$meta")
-	if tg=$(printf "%d" "$genre" 2>/dev/null); then
+    fi
+
+    # Fix genre tag.
+    tg=$(StripSpaces "$genre")
+    if echo "$tg" | grep -qs '^\(( *[0-9][0-9]* *)\|[0-9][0-9]*\)$'; then
+	if tg=$(printf "%d" $(echo "$tg" | sed -e 's/[^0-9]//g') 2>/dev/null); then
 	    tg=${GENRE[$tg]}
 	    if ! test -z "$tg"; then
 		genre=$tg
@@ -572,7 +578,7 @@ for src in "$@"; do
 	fi
 
 	# Add source and destination files.
-	encode="$encode \"\$temp\" \"\$dest\""
+	encode="$encode -o \"\$dest\" \"\$temp\""
 
     else
 	Die "Unknown output format \"$format\""
