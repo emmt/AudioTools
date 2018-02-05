@@ -10,7 +10,7 @@
 
 progname=$(basename "$0" .sh | sed -r 's/[^a-zA-Z0-9]+/_/g')
 
-fields="format quality destdir subdir cover album title genre comment artist track year"
+fields="format quality destdir subdir cover album title genre comment artist albumartist track year"
 for name in $fields; do
     eval ${name}=\"\"
     eval ${name}_set=\"no\"
@@ -430,6 +430,9 @@ for src in "$@"; do
 	    artist=$(FetchTag "AlbumArtist" "$meta")
 	fi
     fi
+    if test $albumartist_set = "no"; then
+	albumartist=$(FetchTag "AlbumArtist" "$meta")
+    fi
     if test $album_set = "no"; then
 	album=$(FetchTag "Album" "$meta")
     fi
@@ -474,21 +477,25 @@ for src in "$@"; do
     # Setup destination directory and file name.
     dir=$destdir
     if test "$subdir" = "auto"; then
-	if test -z "$artist"; then
-	    dir="$dir/ARTIST"
+	if ! test -z "$albumartist"; then
+	    sub=$albumartist
+	elif ! test -z "$artist"; then
+	    sub=$artist
 	else
-	    dir="$dir/$artist"
+	    sub="ARTIST"
 	fi
-	if test -z "$year"; then
-	    dir="$dir (YEAR)"
+	if ! test -z "$year"; then
+	    sub="$sub ($year)"
 	else
-	    dir="$dir ($year)"
+	    sub="$sub (YEAR)"
 	fi
-	if test -z "$album"; then
-	    dir="$dir ALBUM"
+	if ! test -z "$album"; then
+	    sub="$sub $album"
 	else
-	    dir="$dir $album"
+	    sub="$sub ALBUM"
 	fi
+	sub=$(echo "$sub" | sed -r -e 's, */+ *, - ,g')
+	dir="$dir/$sub"
     fi
     dest="$dir/$base.$format"
 
@@ -554,6 +561,9 @@ for src in "$@"; do
 	if ! test -z "$track"; then
 	    encode="$encode --comment \"TRACKNUMBER=\$track\""
 	fi
+	if ! test -z "$albumartist"; then
+	    encode="$encode --comment \"ALBUMARTIST=\$albumartist\""
+	fi
 	if ! test -z "$comment"; then
 	    encode="$encode --comment \"DESCRIPTION=\$comment\""
 	fi
@@ -586,6 +596,9 @@ for src in "$@"; do
 	fi
 	if ! test -z "$track"; then
 	    encode="$encode --tracknum \"\$track\""
+	fi
+	if ! test -z "$albumartist"; then
+	    encode="$encode --comment \"ALBUMARTIST=\$albumartist\""
 	fi
 	if ! test -z "$comment"; then
 	    encode="$encode -c \"DESCRIPTION=\$comment\""
