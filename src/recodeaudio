@@ -18,6 +18,7 @@ done
 
 # Defaults.
 verbose="no"
+silent="no"
 debug="no"
 format="opus"
 bitrate=128
@@ -32,15 +33,19 @@ case "$TERM" in
 esac
 if test "$ansicolors" = "yes"; then
     ANSIBLUEBOLD="\e[1;34m"
-    ANSIRED="\e[1;31m"
-    ANSIGREEN="\e[1;32m"
+    ANSIRED="\e[0;31m"
+    ANSIGREEN="\e[0;32m"
+    ANSIBLUE="\e[0;34m"
     ANSIBROWN="\e[0;33m"
+    ANSICYAN="\e[0;36m"
     ANSIRESET="\e[0;39;49m"
 else
     ANSIBLUEBOLD=""
     ANSIRED=""
     ANSIGREEN=""
+    ANSIBLUE=""
     ANSIBROWN=""
+    ANSICYAN=""
     ANSIRESET=""
 fi
 Echo() { /bin/echo -e "$*"; }
@@ -59,8 +64,8 @@ Warn() {
 }
 
 Info() {
-    if test "$verbose" = "yes"; then
-	Echo "${ANSIBLUEBOLD}(INFO) $*${ANSIRESET}"
+    if test "$silent" = "no"; then
+	Echo "${ANSIBLUE}(INFO) $*${ANSIRESET}"
     fi
 }
 
@@ -82,6 +87,7 @@ file(s) preserving tags.  The options are:
   --year YEAR              title year
   --track TRACK            track number
   --cover IMAGE            cover image
+  --silent                 suppress non critical messages
   --verbose                verbose mode
   -h, --help               display this help and exit
   --                       end of options
@@ -291,6 +297,9 @@ while test $# -gt 0; do
 	    fi
 	    shift
 	    ;;
+	--silent)
+	    silent="yes"
+	    ;;
 	--verbose)
 	    verbose="yes"
 	    ;;
@@ -313,6 +322,9 @@ while test $# -gt 0; do
     esac
     shift
 done
+if test "$silent" = "yes"; then
+    verbose="no"
+fi
 
 # Compute quality/bitrate for the various encoder.
 bitrate=$(AverageBitrate $quality)
@@ -351,7 +363,9 @@ for src in "$@"; do
 	    # Input is FLAC audio file.
 	    base=$(basename "$src" .flac)
 	    temp="$tempdir/$base.wav"
-	    decode="flac -d -o \"\$temp\" \"\$src\""
+	    decode="flac -d"
+	    test "$verbose" = "yes" || decode="$decode --silent"
+	    decode="$decode -o \"\$temp\" \"\$src\""
 
 	    # Parse meta data.
 	    ExtractTags metaflac "$src" >"$meta"
@@ -366,7 +380,9 @@ for src in "$@"; do
 	    # Input is Opus audio file.
 	    base=$(basename "$src" .opus)
 	    temp="$tempdir/$base.wav"
-	    decode="opusdec --force-wav --quiet \"\$src\" \"\$temp\""
+	    decode="opusdec --force-wav"
+	    test "$verbose" = "yes" || decode="$decode --quiet"
+	    decode="$decode \"\$src\" \"\$temp\""
 	    ExtractTags opusinfo "$src" >"$meta"
 	    ;;
 
@@ -374,7 +390,9 @@ for src in "$@"; do
 	    # Input is OGG Vorbis audio file.
 	    base=$(basename "$src" .ogg)
 	    temp="$tempdir/$base.wav"
-	    decode="oggdec --quiet -o \"\$temp\" \"\$src\""
+	    decode="oggdec"
+	    test "$verbose" = "yes" || decode="$decode --quiet"
+	    decode="$decode -o \"\$temp\" \"\$src\""
 	    ExtractTags ogginfo "$src" >"$meta"
 	    ;;
 
@@ -383,6 +401,7 @@ for src in "$@"; do
 	    base=$(basename "$src" .mp3)
 	    temp="$tempdir/$base.wav"
 	    decode="lame --decode \"\$src\" \"\$temp\""
+	    test "$verbose" = "yes" || decode="$decode --silent"
 	    #decode="sox -q --multi-threaded --norm"
 	    #decode="$decode --type mp3 \"\$src\" --type wav \"\$temp\""
 
@@ -391,7 +410,7 @@ for src in "$@"; do
 	    ;;
 
 	*)
-	    Warn >&2 "Skipping \"$src\" (bad extension)"
+	    Warn >&2 "Skipping \"$src\" (unknown extension)"
 	    continue
 	    ;;
     esac
@@ -478,9 +497,7 @@ for src in "$@"; do
 
 	# Initial encoding command.
 	encode="lame --noreplaygain -q 2 -V $lamequality"
-	if test "$verbose" = "no"; then
-	    encode="$encode --silent"
-	fi
+	test "$verbose" = "yes" || encode="$encode --silent"
 
 	# Add tags.
 	encode="$encode --add-id3v2 --id3v2-only"
@@ -552,6 +569,7 @@ for src in "$@"; do
 
 	# Initial encoding command.
 	encode="oggenc -q $quality"
+	test "$verbose" = "yes" || encode="$encode --quiet"
 
 	# Add tags (see https://www.xiph.org/vorbis/doc/v-comment.html).
 	if ! test -z "$title"; then
@@ -585,11 +603,19 @@ for src in "$@"; do
     fi
 
     # Evaluate commands.
-    Info "Output directory: $dir"
-    Info "Cover image: $cover"
+    if test "$silent" = "no"; then
+	Echo "input:  ${ANSICYAN}$src${ANSIRESET}"
+    fi
+    if test "$verbose" = "yes"; then
+	Info "Output directory: $dir"
+	Info "Cover image: $cover"
+    fi
     mkdir -p "$dir"
     rm -f "$temp"
     eval $decode
     eval $encode
+    if test "$silent" = "no"; then
+	Echo "output: ${ANSIGREEN}$dest${ANSIRESET}"
+    fi
 done
 exit 0
