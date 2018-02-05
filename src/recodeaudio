@@ -494,7 +494,7 @@ for src in "$@"; do
 	else
 	    sub="$sub ALBUM"
 	fi
-	sub=$(echo "$sub" | sed -r -e 's, */+ *, - ,g')
+	sub=$(echo "$sub" | sed -r -e 's,/+,-,g')
 	dir="$dir/$sub"
     fi
     dest="$dir/$base.$format"
