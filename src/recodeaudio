@@ -182,15 +182,15 @@ ExtractTags() {
 	    opusinfo -- "$2" 2>"/dev/null" \
 		| sed -r \
 		      -e "/^	[A-Za-z]*=/!d;s/[ 	]+/ /g;s/ $//" \
-		      -e "s/^ title= */Title : /" \
-		      -e "s/^ artist= */Artist : /" \
-		      -e "s/^ ALBUMARTIST= */AlbumArtist : /" \
-		      -e "s/^ album= */Album : /" \
-		      -e "s/^ date= *([12][0-9][0-9][0-9])$/Year : \1/I" \
-		      -e "s/^ date= */Date : /" \
-		      -e "s/^ TRACKNUMBER= */Track : /" \
-		      -e "s/^ (genre|GENRE)= */Genre : /" \
-		      -e "s/^ DESCRIPTION= */Comment : /" \
+		      -e "s/^ TITLE= */Title : /I" \
+		      -e "s/^ ARTIST= */Artist : /I" \
+		      -e "s/^ ALBUMARTIST= */AlbumArtist : /I" \
+		      -e "s/^ ALBUM= */Album : /I" \
+		      -e "s/^ DATE= *([12][0-9][0-9][0-9])$/Year : \1/I" \
+		      -e "s/^ DATE= */Date : /I" \
+		      -e "s/^ TRACKNUMBER= */Track : /I" \
+		      -e "s/^ GENRE= */Genre : /I" \
+		      -e "s/^ DESCRIPTION= */Comment : /I" \
 		      -e "/^ /d"
 	    ;;
 
