@@ -76,7 +76,7 @@ Usage: $progname [OPTIONS] [INPUT]...
 Convert audio sound file(s) into high quality MP3, OGG Vorbis or Opus audio
 file(s) preserving tags.  The options are:
   --format opus|ogg|mp3    output type [$format]
-  --quality QUALITY        qualitoutput bitrate in kbit/s [$bitrate]
+  --quality QUALITY        output quality [$quality]
   --destdir DESTDIR        top destination directory [$destdir]
   --subdir auto|none       create subdirectory based on tags [$subdir]
   --album ALBUM            album title
